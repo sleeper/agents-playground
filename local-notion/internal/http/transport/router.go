@@ -25,6 +25,9 @@ func NewRouter(cfg config.Config, store *sqlite.Store) http.Handler {
 	pageHandler := handlers.NewPageHandler(store)
 	databaseHandler := handlers.NewDatabaseHandler(store)
 
+	r.Get("/", handlers.IndexHandler())
+	r.Get("/favicon.ico", handlers.FaviconHandler())
+
 	r.Route("/api", func(api chi.Router) {
 		api.Get("/health", handlers.HealthHandler(store))
 		api.Get("/metrics", handlers.MetricsHandler())
