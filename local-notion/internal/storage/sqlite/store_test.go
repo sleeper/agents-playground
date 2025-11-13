@@ -2,6 +2,9 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -144,6 +147,25 @@ func toNumber(v any) float64 {
 	default:
 		return 0
 	}
+}
+
+func TestOpenCreatesDirectoryForFileDSN(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "data", "app.db")
+	dsn := fmt.Sprintf("file:%s?_fk=1", dbPath)
+
+	store, err := Open(dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	dirInfo, err := os.Stat(filepath.Dir(dbPath))
+	require.NoError(t, err)
+	require.True(t, dirInfo.IsDir())
+
+	_, err = os.Stat(dbPath)
+	require.NoError(t, err)
 }
 
 func TestStoreListViewItemsViewNotFound(t *testing.T) {

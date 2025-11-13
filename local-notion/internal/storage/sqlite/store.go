@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,6 +34,9 @@ type Store struct {
 func Open(dsn string) (*Store, error) {
 	if strings.TrimSpace(dsn) == "" {
 		dsn = ":memory:"
+	}
+	if err := ensureSQLiteDir(dsn); err != nil {
+		return nil, err
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -73,6 +79,44 @@ func applyMigrations(db *sql.DB) error {
 		if _, err := db.Exec(string(sqlBytes)); err != nil {
 			return fmt.Errorf("exec migration %s: %w", entry.Name(), err)
 		}
+	}
+	return nil
+}
+
+func ensureSQLiteDir(dsn string) error {
+	if !strings.HasPrefix(dsn, "file:") {
+		return nil
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		return fmt.Errorf("parse sqlite dsn: %w", err)
+	}
+	var pathPart string
+	if parsed.Opaque != "" {
+		pathPart = parsed.Opaque
+	} else {
+		pathPart = parsed.Path
+	}
+	if pathPart == "" {
+		pathPart = strings.TrimPrefix(dsn, "file:")
+		if idx := strings.Index(pathPart, "?"); idx >= 0 {
+			pathPart = pathPart[:idx]
+		}
+	}
+	if pathPart == "" || pathPart == ":memory:" {
+		return nil
+	}
+	pathPart = strings.TrimPrefix(pathPart, "//")
+	pathPart, err = url.PathUnescape(pathPart)
+	if err != nil {
+		return fmt.Errorf("unescape sqlite path: %w", err)
+	}
+	dir := filepath.Dir(pathPart)
+	if dir == "." || dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create sqlite dir: %w", err)
 	}
 	return nil
 }
