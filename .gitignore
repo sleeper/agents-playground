@@ -1,0 +1,15 @@
+# Go
+bin/
+*.test
+
+# Node
+node_modules/
+local-notion/node_modules/
+local-notion/web/node_modules/
+dist/
+local-notion/dist/
+local-notion/web/dist/
+
+# Editor
+.DS_Store
+.env
