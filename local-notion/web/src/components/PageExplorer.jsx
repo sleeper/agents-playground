@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import PageDirectory from './PageDirectory.jsx';
 
 export default function PageExplorer() {
   const [pageId, setPageId] = useState('');
@@ -6,18 +7,16 @@ export default function PageExplorer() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  async function handleFetch(event) {
-    event.preventDefault();
-    if (!pageId) {
+  async function fetchPage(targetId) {
+    if (!targetId) {
       setError('Provide a page ID to load data.');
       setPage(null);
       return;
     }
-
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`/api/pages/${pageId}`);
+      const res = await fetch(`/api/pages/${targetId}`);
       const json = await res.json();
       if (!res.ok) {
         throw new Error(json.errors?.[0]?.message ?? 'Request failed');
@@ -29,6 +28,16 @@ export default function PageExplorer() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleFetch(event) {
+    event.preventDefault();
+    await fetchPage(pageId);
+  }
+
+  function handleQuickLoad(id) {
+    setPageId(id);
+    fetchPage(id);
   }
 
   return (
@@ -61,6 +70,34 @@ export default function PageExplorer() {
               <pre>{page.content}</pre>
             </details>
           )}
+          {Array.isArray(page.linked_page_ids) && page.linked_page_ids.length > 0 && (
+            <section className="link-list">
+              <h4>Linked pages</h4>
+              <ul>
+                {page.linked_page_ids.map((id) => (
+                  <li key={id}>
+                    <button type="button" className="link-button" onClick={() => handleQuickLoad(id)}>
+                      {id}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {Array.isArray(page.backlinked_page_ids) && page.backlinked_page_ids.length > 0 && (
+            <section className="link-list">
+              <h4>Backlinks</h4>
+              <ul>
+                {page.backlinked_page_ids.map((id) => (
+                  <li key={id}>
+                    <button type="button" className="link-button" onClick={() => handleQuickLoad(id)}>
+                      {id}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           {Array.isArray(page.tags) && page.tags.length > 0 && (
             <footer>
               <strong>Tags:</strong> {page.tags.join(', ')}
@@ -68,6 +105,7 @@ export default function PageExplorer() {
           )}
         </article>
       )}
+      <PageDirectory onSelect={handleQuickLoad} />
     </section>
   );
 }

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import PageCreator from './components/PageCreator.jsx';
 import PageExplorer from './components/PageExplorer.jsx';
+import DatabaseCreator from './components/DatabaseCreator.jsx';
 import DatabaseViewExplorer from './components/DatabaseViewExplorer.jsx';
 import './App.css';
 
@@ -67,7 +69,9 @@ export default function App() {
       </section>
 
       <main>
+        <PageCreator />
         <PageExplorer />
+        <DatabaseCreator />
         <DatabaseViewExplorer />
       </main>
 
