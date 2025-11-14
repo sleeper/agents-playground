@@ -4,18 +4,20 @@ import "time"
 
 // Page represents a free-form content page.
 type Page struct {
-	ID           string    `json:"id"`
-	Slug         string    `json:"slug"`
-	Title        string    `json:"title"`
-	Summary      string    `json:"summary"`
-	Content      string    `json:"content"`
-	ParentPageID *string   `json:"parent_page_id"`
-	CoverImageID *string   `json:"cover_image_id"`
-	Icon         *string   `json:"icon"`
-	Tags         []string  `json:"tags"`
-	IsArchived   bool      `json:"is_archived"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID                string    `json:"id"`
+	Slug              string    `json:"slug"`
+	Title             string    `json:"title"`
+	Summary           string    `json:"summary"`
+	Content           string    `json:"content"`
+	ParentPageID      *string   `json:"parent_page_id"`
+	CoverImageID      *string   `json:"cover_image_id"`
+	Icon              *string   `json:"icon"`
+	Tags              []string  `json:"tags"`
+	LinkedPageIDs     []string  `json:"linked_page_ids"`
+	BacklinkedPageIDs []string  `json:"backlinked_page_ids"`
+	IsArchived        bool      `json:"is_archived"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // Database represents a structured collection of page-backed items.

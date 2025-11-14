@@ -35,6 +35,7 @@ go test ./...
 
 | Method | Path | Description |
 | --- | --- | --- |
+| `GET` | `/api/pages` | List stored pages for quick lookup. |
 | `POST` | `/api/pages` | Create a new page. |
 | `GET` | `/api/pages/{id}` | Retrieve page details. |
 | `POST` | `/api/databases` | Create a database with properties/views. |
@@ -52,6 +53,10 @@ Responses follow the envelope structure `{ "data": ..., "errors": [...] }`.
 The `web/` directory contains a lightweight React single-page app for interacting with the
 platform API. It is intentionally minimal so it can run on constrained devices such as a
 Raspberry Pi while still providing quick insight into stored pages and database view items.
+The UI now includes forms for creating standalone pages and databases directly from the
+browser in addition to the existing read-only explorers. Page creation supports defining
+links to other pages, and the explorer reveals both outbound relations and backlinks to
+mirror Notion-style navigation.
 
 ### Installing dependencies
 

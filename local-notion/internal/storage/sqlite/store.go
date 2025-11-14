@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -123,12 +124,13 @@ func ensureSQLiteDir(dsn string) error {
 
 // CreatePageInput holds fields for a new page.
 type CreatePageInput struct {
-	Slug         string
-	Title        string
-	Summary      string
-	Content      string
-	ParentPageID *string
-	Tags         []string
+	Slug          string
+	Title         string
+	Summary       string
+	Content       string
+	ParentPageID  *string
+	Tags          []string
+	LinkedPageIDs []string
 }
 
 // CreatePage persists a new page.
@@ -142,24 +144,54 @@ func (s *Store) CreatePage(ctx context.Context, in CreatePageInput) (*domain.Pag
 	if err != nil {
 		return nil, fmt.Errorf("marshal tags: %w", err)
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO pages(
-            id, slug, title, summary, content, parent_page_id, tags, is_archived, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-    `, id, in.Slug, in.Title, in.Summary, in.Content, in.ParentPageID, string(tagJSON), now, now)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err = tx.ExecContext(
+		ctx,
+		`INSERT INTO pages(
+    id, slug, title, summary, content, parent_page_id, tags, is_archived, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+`,
+		id, in.Slug, in.Title, in.Summary, in.Content, in.ParentPageID, string(tagJSON), now, now,
+	); err != nil {
 		return nil, fmt.Errorf("insert page: %w", err)
 	}
+
+	cleanedLinks := uniqueLinkedPageIDs(in.LinkedPageIDs, id)
+	for _, targetID := range cleanedLinks {
+		if _, err = tx.ExecContext(
+			ctx,
+			`INSERT OR IGNORE INTO page_links(source_page_id, target_page_id, created_at) VALUES (?, ?, ?)`,
+			id, targetID, now,
+		); err != nil {
+			return nil, fmt.Errorf("insert page link: %w", err)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit transaction: %w", err)
+	}
+
 	return &domain.Page{
-		ID:           id,
-		Slug:         in.Slug,
-		Title:        in.Title,
-		Summary:      in.Summary,
-		Content:      in.Content,
-		ParentPageID: in.ParentPageID,
-		Tags:         in.Tags,
-		IsArchived:   false,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:            id,
+		Slug:          in.Slug,
+		Title:         in.Title,
+		Summary:       in.Summary,
+		Content:       in.Content,
+		ParentPageID:  in.ParentPageID,
+		Tags:          in.Tags,
+		LinkedPageIDs: cleanedLinks,
+		IsArchived:    false,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}, nil
 }
 
@@ -191,7 +223,101 @@ func (s *Store) GetPage(ctx context.Context, id string) (*domain.Page, error) {
 			return nil, fmt.Errorf("unmarshal tags: %w", err)
 		}
 	}
+	links, err := s.loadPageLinks(ctx, page.ID)
+	if err != nil {
+		return nil, err
+	}
+	page.LinkedPageIDs = links.outbound
+	page.BacklinkedPageIDs = links.inbound
 	return &page, nil
+}
+
+func (s *Store) loadPageLinks(ctx context.Context, id string) (*pageLinks, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT target_page_id FROM page_links WHERE source_page_id = ? ORDER BY target_page_id`, id)
+	if err != nil {
+		return nil, fmt.Errorf("select outbound links: %w", err)
+	}
+	defer rows.Close()
+	var outbound []string
+	for rows.Next() {
+		var target string
+		if err := rows.Scan(&target); err != nil {
+			return nil, fmt.Errorf("scan outbound link: %w", err)
+		}
+		outbound = append(outbound, target)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate outbound links: %w", err)
+	}
+
+	inboundRows, err := s.db.QueryContext(ctx, `SELECT source_page_id FROM page_links WHERE target_page_id = ? ORDER BY source_page_id`, id)
+	if err != nil {
+		return nil, fmt.Errorf("select inbound links: %w", err)
+	}
+	defer inboundRows.Close()
+	var inbound []string
+	for inboundRows.Next() {
+		var source string
+		if err := inboundRows.Scan(&source); err != nil {
+			return nil, fmt.Errorf("scan inbound link: %w", err)
+		}
+		inbound = append(inbound, source)
+	}
+	if err := inboundRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate inbound links: %w", err)
+	}
+
+	return &pageLinks{outbound: outbound, inbound: inbound}, nil
+}
+
+type pageLinks struct {
+	outbound []string
+	inbound  []string
+}
+
+func uniqueLinkedPageIDs(ids []string, currentID string) []string {
+	dedup := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" || trimmed == currentID {
+			continue
+		}
+		dedup[trimmed] = struct{}{}
+	}
+	if len(dedup) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(dedup))
+	for id := range dedup {
+		result = append(result, id)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// ListPages returns a lightweight listing of stored pages.
+func (s *Store) ListPages(ctx context.Context) ([]domain.Page, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, slug, title, summary, parent_page_id FROM pages ORDER BY title`)
+	if err != nil {
+		return nil, fmt.Errorf("select pages: %w", err)
+	}
+	defer rows.Close()
+	var pages []domain.Page
+	for rows.Next() {
+		var page domain.Page
+		var parent sql.NullString
+		if err := rows.Scan(&page.ID, &page.Slug, &page.Title, &page.Summary, &parent); err != nil {
+			return nil, fmt.Errorf("scan page row: %w", err)
+		}
+		if parent.Valid {
+			page.ParentPageID = &parent.String
+		}
+		pages = append(pages, page)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pages: %w", err)
+	}
+	return pages, nil
 }
 
 // CreateDatabaseInput defines payload for new database.
