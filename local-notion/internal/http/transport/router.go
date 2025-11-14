@@ -34,6 +34,7 @@ func NewRouter(cfg config.Config, store *sqlite.Store) http.Handler {
 		api.Get("/config", handlers.ConfigHandler(cfg))
 
 		api.Route("/pages", func(pr chi.Router) {
+			pr.Get("/", pageHandler.ListPages)
 			pr.Post("/", pageHandler.CreatePage)
 			pr.Route("/{id}", func(r chi.Router) {
 				r.Get("/", pageHandler.GetPage)

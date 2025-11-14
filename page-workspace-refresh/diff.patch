@@ -1,0 +1,453 @@
+diff --git a/local-notion/README.md b/local-notion/README.md
+index 7c64516..093932a 100644
+--- a/local-notion/README.md
++++ b/local-notion/README.md
+@@ -58,6 +58,22 @@ browser in addition to the existing read-only explorers. Page creation supports
+ links to other pages, and the explorer reveals both outbound relations and backlinks to
+ mirror Notion-style navigation.
+ 
++### Using the workspace UI
++
++The browser experience is split into two columns:
++
++* **Sidebar (left):** Compose new pages and databases. After a successful page submission the
++  explorer automatically opens the record so you can confirm the content without copying IDs
++  around manually.
++* **Content (right):** Load existing pages, follow linked records, and browse the directory of
++  stored pages. The directory now refreshes automatically when the page list changes, so you
++  always see newly added content without reloading the app.
++
++Use the directory's “Load” button to jump between related pages. When you are ready to link
++pages together, copy the IDs that appear alongside each entry and paste them into the “Linked
++Page IDs” textarea in the creation form. Backlinks show up automatically once relationships are
++stored.
++
+ ### Installing dependencies
+ 
+ From the repository root:
+diff --git a/local-notion/web/src/App.css b/local-notion/web/src/App.css
+index 54775f8..f63e658 100644
+--- a/local-notion/web/src/App.css
++++ b/local-notion/web/src/App.css
+@@ -30,12 +30,31 @@ header > h1 {
+   overflow-x: auto;
+ }
+ 
+-main {
++.workspace {
+   display: grid;
+-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
++  gap: 2rem;
++}
++
++@media (min-width: 960px) {
++  .workspace {
++    grid-template-columns: 320px 1fr;
++    align-items: start;
++  }
++}
++
++.sidebar,
++.content-column {
++  display: flex;
++  flex-direction: column;
+   gap: 1.5rem;
+ }
+ 
++.stack {
++  display: flex;
++  flex-direction: column;
++  gap: 1rem;
++}
++
+ .panel {
+   display: grid;
+   gap: 0.5rem;
+@@ -88,6 +107,11 @@ main {
+   cursor: wait;
+ }
+ 
++.empty-state {
++  color: #475569;
++  font-style: italic;
++}
++
+ .link-list {
+   margin-top: 1rem;
+ }
+diff --git a/local-notion/web/src/App.jsx b/local-notion/web/src/App.jsx
+index 7aeeb50..770e585 100644
+--- a/local-notion/web/src/App.jsx
++++ b/local-notion/web/src/App.jsx
+@@ -1,4 +1,4 @@
+-import { useEffect, useState } from 'react';
++import { useCallback, useEffect, useState } from 'react';
+ import PageCreator from './components/PageCreator.jsx';
+ import PageExplorer from './components/PageExplorer.jsx';
+ import DatabaseCreator from './components/DatabaseCreator.jsx';
+@@ -9,6 +9,8 @@ export default function App() {
+   const [health, setHealth] = useState(null);
+   const [config, setConfig] = useState(null);
+   const [healthError, setHealthError] = useState('');
++  const [selectedPageId, setSelectedPageId] = useState('');
++  const [pageRefreshKey, setPageRefreshKey] = useState(0);
+ 
+   useEffect(() => {
+     async function loadHealth() {
+@@ -41,13 +43,25 @@ export default function App() {
+     loadConfig();
+   }, []);
+ 
++  const handlePageCreated = useCallback((page) => {
++    if (page?.id) {
++      setSelectedPageId(page.id);
++      setPageRefreshKey((value) => value + 1);
++    }
++  }, []);
++
++  const handleSelectPage = useCallback((id) => {
++    setSelectedPageId(id);
++  }, []);
++
+   return (
+     <div className="app-shell">
+       <header>
+-        <h1>Agents Playground Control Panel</h1>
++        <h1>Local Notion Workspace</h1>
+         <p>
+-          Inspect API health, load pages, and browse database view items. This UI is intentionally
+-          lightweight to perform well on small devices.
++          Use the panels below to create pages, browse everything stored locally, and inspect rich
++          page details. The layout mirrors a minimal Notion-like workspace with controls on the left
++          and content on the right.
+         </p>
+       </header>
+ 
+@@ -68,11 +82,19 @@ export default function App() {
+         )}
+       </section>
+ 
+-      <main>
+-        <PageCreator />
+-        <PageExplorer />
+-        <DatabaseCreator />
+-        <DatabaseViewExplorer />
++      <main className="workspace">
++        <aside className="sidebar">
++          <PageCreator onCreated={handlePageCreated} />
++          <DatabaseCreator />
++        </aside>
++        <section className="content-column">
++          <PageExplorer
++            selectedPageId={selectedPageId}
++            onSelectPage={handleSelectPage}
++            refreshKey={pageRefreshKey}
++          />
++          <DatabaseViewExplorer />
++        </section>
+       </main>
+ 
+       <footer>
+diff --git a/local-notion/web/src/components/DatabaseCreator.jsx b/local-notion/web/src/components/DatabaseCreator.jsx
+index 954f051..e0ad9c1 100644
+--- a/local-notion/web/src/components/DatabaseCreator.jsx
++++ b/local-notion/web/src/components/DatabaseCreator.jsx
+@@ -70,8 +70,14 @@ export default function DatabaseCreator() {
+   }
+ 
+   return (
+-    <section>
+-      <h2>Create Database</h2>
++    <section className="card stack">
++      <header>
++        <h2>Create Database</h2>
++        <p className="help-text">
++          Define schema and views to spin up a lightweight Notion-style database. Keep the JSON
++          concise when you are experimenting locally.
++        </p>
++      </header>
+       <form className="panel" onSubmit={handleSubmit}>
+         <label htmlFor="database-slug">Slug</label>
+         <input
+diff --git a/local-notion/web/src/components/PageCreator.jsx b/local-notion/web/src/components/PageCreator.jsx
+index 78d766b..82f1351 100644
+--- a/local-notion/web/src/components/PageCreator.jsx
++++ b/local-notion/web/src/components/PageCreator.jsx
+@@ -10,7 +10,7 @@ const createInitialState = () => ({
+   linkedPageIds: '',
+ });
+ 
+-export default function PageCreator() {
++export default function PageCreator({ onCreated }) {
+   const [form, setForm] = useState(createInitialState);
+   const [loading, setLoading] = useState(false);
+   const [error, setError] = useState('');
+@@ -56,7 +56,9 @@ export default function PageCreator() {
+       if (!res.ok) {
+         throw new Error(json.errors?.[0]?.message ?? 'Request failed');
+       }
+-      setCreatedPage(json.data ?? json);
++      const created = json.data ?? json;
++      setCreatedPage(created);
++      onCreated?.(created);
+       resetForm();
+     } catch (err) {
+       setError(err.message);
+@@ -67,8 +69,14 @@ export default function PageCreator() {
+   }
+ 
+   return (
+-    <section>
+-      <h2>Create Page</h2>
++    <section className="card stack">
++      <header>
++        <h2>Create Page</h2>
++        <p className="help-text">
++          Draft a page and submit it to store it locally. Newly created pages open on the right so
++          you can verify the content immediately.
++        </p>
++      </header>
+       <form className="panel" onSubmit={handleSubmit}>
+         <label htmlFor="page-slug">Slug</label>
+         <input
+diff --git a/local-notion/web/src/components/PageDirectory.jsx b/local-notion/web/src/components/PageDirectory.jsx
+index 2b61017..0ae0533 100644
+--- a/local-notion/web/src/components/PageDirectory.jsx
++++ b/local-notion/web/src/components/PageDirectory.jsx
+@@ -1,11 +1,11 @@
+-import { useState } from 'react';
++import { useCallback, useEffect, useState } from 'react';
+ 
+-export default function PageDirectory({ onSelect }) {
++export default function PageDirectory({ onSelect, refreshKey = 0 }) {
+   const [pages, setPages] = useState([]);
+   const [loading, setLoading] = useState(false);
+   const [error, setError] = useState('');
+ 
+-  async function loadPages() {
++  const loadPages = useCallback(async () => {
+     setLoading(true);
+     setError('');
+     try {
+@@ -22,7 +22,17 @@ export default function PageDirectory({ onSelect }) {
+     } finally {
+       setLoading(false);
+     }
+-  }
++  }, []);
++
++  useEffect(() => {
++    loadPages();
++  }, [loadPages]);
++
++  useEffect(() => {
++    if (refreshKey > 0) {
++      loadPages();
++    }
++  }, [refreshKey, loadPages]);
+ 
+   return (
+     <section className="panel card directory-panel">
+diff --git a/local-notion/web/src/components/PageExplorer.jsx b/local-notion/web/src/components/PageExplorer.jsx
+index 3fda510..a86209a 100644
+--- a/local-notion/web/src/components/PageExplorer.jsx
++++ b/local-notion/web/src/components/PageExplorer.jsx
+@@ -1,13 +1,13 @@
+-import { useState } from 'react';
++import { useCallback, useEffect, useState } from 'react';
+ import PageDirectory from './PageDirectory.jsx';
+ 
+-export default function PageExplorer() {
+-  const [pageId, setPageId] = useState('');
++export default function PageExplorer({ selectedPageId = '', onSelectPage, refreshKey }) {
++  const [pageId, setPageId] = useState(selectedPageId);
+   const [page, setPage] = useState(null);
+   const [error, setError] = useState('');
+   const [loading, setLoading] = useState(false);
+ 
+-  async function fetchPage(targetId) {
++  const fetchPage = useCallback(async (targetId) => {
+     if (!targetId) {
+       setError('Provide a page ID to load data.');
+       setPage(null);
+@@ -28,84 +28,109 @@ export default function PageExplorer() {
+     } finally {
+       setLoading(false);
+     }
+-  }
++  }, []);
++
++  const handleQuickLoad = useCallback(
++    (id) => {
++      setPageId(id);
++      onSelectPage?.(id);
++      fetchPage(id);
++    },
++    [fetchPage, onSelectPage]
++  );
+ 
+   async function handleFetch(event) {
+     event.preventDefault();
+-    await fetchPage(pageId);
++    const trimmed = pageId.trim();
++    await fetchPage(trimmed);
++    if (trimmed) {
++      onSelectPage?.(trimmed);
++    }
+   }
+ 
+-  function handleQuickLoad(id) {
+-    setPageId(id);
+-    fetchPage(id);
+-  }
++  useEffect(() => {
++    if (selectedPageId && selectedPageId !== pageId) {
++      setPageId(selectedPageId);
++      fetchPage(selectedPageId);
++    }
++  }, [selectedPageId, pageId, fetchPage]);
+ 
+   return (
+-    <section>
+-      <h2>Page Explorer</h2>
+-      <form onSubmit={handleFetch} className="panel">
+-        <label htmlFor="page-id">Page ID</label>
+-        <input
+-          id="page-id"
+-          type="text"
+-          value={pageId}
+-          onChange={(event) => setPageId(event.target.value)}
+-          placeholder="Enter a page ID"
+-        />
+-        <button type="submit" disabled={loading}>
+-          {loading ? 'Loading…' : 'Load Page'}
+-        </button>
+-      </form>
+-      {error && <p className="error">{error}</p>}
+-      {page && (
+-        <article className="card">
+-          <header>
+-            <h3>{page.title}</h3>
+-            <small>Slug: {page.slug}</small>
+-          </header>
+-          <p>{page.summary}</p>
+-          {page.content && (
+-            <details>
+-              <summary>Content</summary>
+-              <pre>{page.content}</pre>
+-            </details>
+-          )}
+-          {Array.isArray(page.linked_page_ids) && page.linked_page_ids.length > 0 && (
+-            <section className="link-list">
+-              <h4>Linked pages</h4>
+-              <ul>
+-                {page.linked_page_ids.map((id) => (
+-                  <li key={id}>
+-                    <button type="button" className="link-button" onClick={() => handleQuickLoad(id)}>
+-                      {id}
+-                    </button>
+-                  </li>
+-                ))}
+-              </ul>
+-            </section>
+-          )}
+-          {Array.isArray(page.backlinked_page_ids) && page.backlinked_page_ids.length > 0 && (
+-            <section className="link-list">
+-              <h4>Backlinks</h4>
+-              <ul>
+-                {page.backlinked_page_ids.map((id) => (
+-                  <li key={id}>
+-                    <button type="button" className="link-button" onClick={() => handleQuickLoad(id)}>
+-                      {id}
+-                    </button>
+-                  </li>
+-                ))}
+-              </ul>
+-            </section>
+-          )}
+-          {Array.isArray(page.tags) && page.tags.length > 0 && (
+-            <footer>
+-              <strong>Tags:</strong> {page.tags.join(', ')}
+-            </footer>
+-          )}
+-        </article>
+-      )}
+-      <PageDirectory onSelect={handleQuickLoad} />
++    <section className="stack page-explorer">
++      <article className="card stack">
++        <header>
++          <h2>Page Explorer</h2>
++          <p className="help-text">
++            Enter a page ID or pick one from the directory to inspect the stored content, linked
++            pages, and backlinks.
++          </p>
++        </header>
++        <form onSubmit={handleFetch} className="panel">
++          <label htmlFor="page-id">Page ID</label>
++          <input
++            id="page-id"
++            type="text"
++            value={pageId}
++            onChange={(event) => setPageId(event.target.value)}
++            placeholder="Enter or paste a page ID"
++          />
++          <button type="submit" disabled={loading}>
++            {loading ? 'Loading…' : 'Load Page'}
++          </button>
++        </form>
++        {error && <p className="error">{error}</p>}
++        {page ? (
++          <article className="card">
++            <header>
++              <h3>{page.title}</h3>
++              <small>Slug: {page.slug}</small>
++            </header>
++            <p>{page.summary}</p>
++            {page.content && (
++              <details>
++                <summary>Content</summary>
++                <pre>{page.content}</pre>
++              </details>
++            )}
++            {Array.isArray(page.linked_page_ids) && page.linked_page_ids.length > 0 && (
++              <section className="link-list">
++                <h4>Linked pages</h4>
++                <ul>
++                  {page.linked_page_ids.map((id) => (
++                    <li key={id}>
++                      <button type="button" className="link-button" onClick={() => handleQuickLoad(id)}>
++                        {id}
++                      </button>
++                    </li>
++                  ))}
++                </ul>
++              </section>
++            )}
++            {Array.isArray(page.backlinked_page_ids) && page.backlinked_page_ids.length > 0 && (
++              <section className="link-list">
++                <h4>Backlinks</h4>
++                <ul>
++                  {page.backlinked_page_ids.map((id) => (
++                    <li key={id}>
++                      <button type="button" className="link-button" onClick={() => handleQuickLoad(id)}>
++                        {id}
++                      </button>
++                    </li>
++                  ))}
++                </ul>
++              </section>
++            )}
++            {Array.isArray(page.tags) && page.tags.length > 0 && (
++              <footer>
++                <strong>Tags:</strong> {page.tags.join(', ')}
++              </footer>
++            )}
++          </article>
++        ) : (
++          <p className="empty-state">Select a page from the directory or load one by ID to see its details.</p>
++        )}
++      </article>
++      <PageDirectory onSelect={handleQuickLoad} refreshKey={refreshKey} />
+     </section>
+   );
+ }

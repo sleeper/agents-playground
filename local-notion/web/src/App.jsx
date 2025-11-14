@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import PageCreator from './components/PageCreator.jsx';
 import PageExplorer from './components/PageExplorer.jsx';
+import DatabaseCreator from './components/DatabaseCreator.jsx';
 import DatabaseViewExplorer from './components/DatabaseViewExplorer.jsx';
 import './App.css';
 
@@ -7,6 +9,8 @@ export default function App() {
   const [health, setHealth] = useState(null);
   const [config, setConfig] = useState(null);
   const [healthError, setHealthError] = useState('');
+  const [selectedPageId, setSelectedPageId] = useState('');
+  const [pageRefreshKey, setPageRefreshKey] = useState(0);
 
   useEffect(() => {
     async function loadHealth() {
@@ -39,13 +43,25 @@ export default function App() {
     loadConfig();
   }, []);
 
+  const handlePageCreated = useCallback((page) => {
+    if (page?.id) {
+      setSelectedPageId(page.id);
+      setPageRefreshKey((value) => value + 1);
+    }
+  }, []);
+
+  const handleSelectPage = useCallback((id) => {
+    setSelectedPageId(id);
+  }, []);
+
   return (
     <div className="app-shell">
       <header>
-        <h1>Agents Playground Control Panel</h1>
+        <h1>Local Notion Workspace</h1>
         <p>
-          Inspect API health, load pages, and browse database view items. This UI is intentionally
-          lightweight to perform well on small devices.
+          Use the panels below to create pages, browse everything stored locally, and inspect rich
+          page details. The layout mirrors a minimal Notion-like workspace with controls on the left
+          and content on the right.
         </p>
       </header>
 
@@ -66,9 +82,19 @@ export default function App() {
         )}
       </section>
 
-      <main>
-        <PageExplorer />
-        <DatabaseViewExplorer />
+      <main className="workspace">
+        <aside className="sidebar">
+          <PageCreator onCreated={handlePageCreated} />
+          <DatabaseCreator />
+        </aside>
+        <section className="content-column">
+          <PageExplorer
+            selectedPageId={selectedPageId}
+            onSelectPage={handleSelectPage}
+            refreshKey={pageRefreshKey}
+          />
+          <DatabaseViewExplorer />
+        </section>
       </main>
 
       <footer>

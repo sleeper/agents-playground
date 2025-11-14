@@ -28,6 +28,43 @@ func TestStoreCreateAndGetPage(t *testing.T) {
 	require.Equal(t, page.Summary, fetched.Summary)
 }
 
+func TestStoreCreatePageWithLinks(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	anchor, err := store.CreatePage(ctx, CreatePageInput{Slug: "anchor", Title: "Anchor"})
+	require.NoError(t, err)
+
+	linked, err := store.CreatePage(ctx, CreatePageInput{Slug: "linked", Title: "Linked", LinkedPageIDs: []string{anchor.ID, anchor.ID, ""}})
+	require.NoError(t, err)
+	require.Equal(t, []string{anchor.ID}, linked.LinkedPageIDs)
+
+	fetchedLinked, err := store.GetPage(ctx, linked.ID)
+	require.NoError(t, err)
+	require.Equal(t, []string{anchor.ID}, fetchedLinked.LinkedPageIDs)
+
+	fetchedAnchor, err := store.GetPage(ctx, anchor.ID)
+	require.NoError(t, err)
+	require.Contains(t, fetchedAnchor.BacklinkedPageIDs, linked.ID)
+}
+
+func TestStoreListPages(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	first, err := store.CreatePage(ctx, CreatePageInput{Slug: "first", Title: "First"})
+	require.NoError(t, err)
+	_, err = store.CreatePage(ctx, CreatePageInput{Slug: "second", Title: "Second", ParentPageID: &first.ID})
+	require.NoError(t, err)
+
+	pages, err := store.ListPages(ctx)
+	require.NoError(t, err)
+	require.Len(t, pages, 2)
+	require.Equal(t, "First", pages[0].Title)
+	require.Equal(t, first.ID, pages[0].ID)
+	require.NotNil(t, pages[1].ParentPageID)
+}
+
 func TestStoreCreateDatabaseWithPropertiesAndViews(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

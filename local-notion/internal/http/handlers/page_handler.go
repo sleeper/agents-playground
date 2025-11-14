@@ -21,12 +21,13 @@ func NewPageHandler(store *sqlite.Store) *PageHandler {
 
 // CreatePageRequest is the payload for POST /api/pages.
 type CreatePageRequest struct {
-	Slug         string   `json:"slug"`
-	Title        string   `json:"title"`
-	Summary      string   `json:"summary"`
-	Content      string   `json:"content"`
-	ParentPageID *string  `json:"parent_page_id"`
-	Tags         []string `json:"tags"`
+	Slug          string   `json:"slug"`
+	Title         string   `json:"title"`
+	Summary       string   `json:"summary"`
+	Content       string   `json:"content"`
+	ParentPageID  *string  `json:"parent_page_id"`
+	Tags          []string `json:"tags"`
+	LinkedPageIDs []string `json:"linked_page_ids"`
 }
 
 // CreatePage handles page creation.
@@ -37,12 +38,13 @@ func (h *PageHandler) CreatePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page, err := h.store.CreatePage(r.Context(), sqlite.CreatePageInput{
-		Slug:         req.Slug,
-		Title:        req.Title,
-		Summary:      req.Summary,
-		Content:      req.Content,
-		ParentPageID: req.ParentPageID,
-		Tags:         req.Tags,
+		Slug:          req.Slug,
+		Title:         req.Title,
+		Summary:       req.Summary,
+		Content:       req.Content,
+		ParentPageID:  req.ParentPageID,
+		Tags:          req.Tags,
+		LinkedPageIDs: req.LinkedPageIDs,
 	})
 	if err != nil {
 		respondJSON(w, http.StatusBadRequest, Envelope{Errors: []APIError{{Message: err.Error()}}})
@@ -64,4 +66,14 @@ func (h *PageHandler) GetPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, Envelope{Data: page})
+}
+
+// ListPages returns a lightweight listing of pages for linking.
+func (h *PageHandler) ListPages(w http.ResponseWriter, r *http.Request) {
+	pages, err := h.store.ListPages(r.Context())
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, Envelope{Errors: []APIError{{Message: err.Error()}}})
+		return
+	}
+	respondJSON(w, http.StatusOK, Envelope{Data: pages})
 }
