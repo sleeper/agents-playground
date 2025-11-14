@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
-export default function PageDirectory({ onSelect }) {
+export default function PageDirectory({ onSelect, refreshKey = 0 }) {
   const [pages, setPages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  async function loadPages() {
+  const loadPages = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -22,7 +22,17 @@ export default function PageDirectory({ onSelect }) {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    loadPages();
+  }, [loadPages]);
+
+  useEffect(() => {
+    if (refreshKey > 0) {
+      loadPages();
+    }
+  }, [refreshKey, loadPages]);
 
   return (
     <section className="panel card directory-panel">

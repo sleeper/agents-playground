@@ -10,7 +10,7 @@ const createInitialState = () => ({
   linkedPageIds: '',
 });
 
-export default function PageCreator() {
+export default function PageCreator({ onCreated }) {
   const [form, setForm] = useState(createInitialState);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -56,7 +56,9 @@ export default function PageCreator() {
       if (!res.ok) {
         throw new Error(json.errors?.[0]?.message ?? 'Request failed');
       }
-      setCreatedPage(json.data ?? json);
+      const created = json.data ?? json;
+      setCreatedPage(created);
+      onCreated?.(created);
       resetForm();
     } catch (err) {
       setError(err.message);
@@ -67,8 +69,14 @@ export default function PageCreator() {
   }
 
   return (
-    <section>
-      <h2>Create Page</h2>
+    <section className="card stack">
+      <header>
+        <h2>Create Page</h2>
+        <p className="help-text">
+          Draft a page and submit it to store it locally. Newly created pages open on the right so
+          you can verify the content immediately.
+        </p>
+      </header>
       <form className="panel" onSubmit={handleSubmit}>
         <label htmlFor="page-slug">Slug</label>
         <input

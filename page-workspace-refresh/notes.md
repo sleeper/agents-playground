@@ -1,0 +1,12 @@
+## Notes
+- Initialized workspace for improving Local Notion browser UI to make page creation and browsing clearer.
+- Updated App layout plan: capture selected page state centrally so the UI can mimic a workspace with sidebar controls and main viewer.
+- Wired PageCreator with an `onCreated` callback so the surrounding workspace can auto-open newly created pages.
+- Reworked PageExplorer to sync with the selected page from App, added clearer instructions, and introduced an empty state message.
+- PageDirectory now loads immediately on mount and refreshes whenever a new page is created.
+- Styled both creator panels as cards with guidance so the sidebar reads like a control area.
+- Refreshed App.css with workspace, sidebar, and stack helpers so the new layout reads clearly on desktop and mobile.
+- Documented the refreshed workspace flow in README so users know where to create and browse pages.
+- Stabilized PageDirectory loading with useCallback-based fetch helpers.
+- Converted page loading helpers to useCallback to avoid duplicate fetches when props change.
+- Verified build (`npm run build`) and backend tests (`go test ./...`) to ensure the refreshed UI works end-to-end.

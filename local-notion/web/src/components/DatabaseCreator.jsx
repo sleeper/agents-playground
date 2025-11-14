@@ -70,8 +70,14 @@ export default function DatabaseCreator() {
   }
 
   return (
-    <section>
-      <h2>Create Database</h2>
+    <section className="card stack">
+      <header>
+        <h2>Create Database</h2>
+        <p className="help-text">
+          Define schema and views to spin up a lightweight Notion-style database. Keep the JSON
+          concise when you are experimenting locally.
+        </p>
+      </header>
       <form className="panel" onSubmit={handleSubmit}>
         <label htmlFor="database-slug">Slug</label>
         <input

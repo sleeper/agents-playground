@@ -58,6 +58,22 @@ browser in addition to the existing read-only explorers. Page creation supports 
 links to other pages, and the explorer reveals both outbound relations and backlinks to
 mirror Notion-style navigation.
 
+### Using the workspace UI
+
+The browser experience is split into two columns:
+
+* **Sidebar (left):** Compose new pages and databases. After a successful page submission the
+  explorer automatically opens the record so you can confirm the content without copying IDs
+  around manually.
+* **Content (right):** Load existing pages, follow linked records, and browse the directory of
+  stored pages. The directory now refreshes automatically when the page list changes, so you
+  always see newly added content without reloading the app.
+
+Use the directory's “Load” button to jump between related pages. When you are ready to link
+pages together, copy the IDs that appear alongside each entry and paste them into the “Linked
+Page IDs” textarea in the creation form. Backlinks show up automatically once relationships are
+stored.
+
 ### Installing dependencies
 
 From the repository root:
