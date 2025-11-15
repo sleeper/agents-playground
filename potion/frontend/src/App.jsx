@@ -44,9 +44,10 @@ export default function App() {
       const response = await fetch(`${API_BASE}/pages`);
       if (!response.ok) throw new Error('Failed to load pages');
       const data = await response.json();
-      setPages(data);
-      if (data.length && !selectedPageId) {
-        setSelectedPageId(data[0].id);
+      const pageList = Array.isArray(data) ? data : [];
+      setPages(pageList);
+      if (pageList.length && !selectedPageId) {
+        setSelectedPageId(pageList[0].id);
       }
     } catch (err) {
       setError(err.message);
@@ -58,9 +59,10 @@ export default function App() {
       const response = await fetch(`${API_BASE}/databases`);
       if (!response.ok) throw new Error('Failed to load databases');
       const data = await response.json();
-      setDatabases(data);
-      if (data.length && !selectedDatabaseId) {
-        setSelectedDatabaseId(data[0].id);
+      const databaseList = Array.isArray(data) ? data : [];
+      setDatabases(databaseList);
+      if (databaseList.length && !selectedDatabaseId) {
+        setSelectedDatabaseId(databaseList[0].id);
       }
     } catch (err) {
       setError(err.message);
@@ -72,7 +74,8 @@ export default function App() {
       const response = await fetch(`${API_BASE}/databases/${databaseId}/entries`);
       if (!response.ok) throw new Error('Failed to load database entries');
       const data = await response.json();
-      setEntries(data);
+      const entryList = Array.isArray(data) ? data : [];
+      setEntries(entryList);
     } catch (err) {
       setError(err.message);
     }

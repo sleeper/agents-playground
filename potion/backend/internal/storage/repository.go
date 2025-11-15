@@ -138,7 +138,7 @@ func (r *Repository) ListPages(ctx context.Context) ([]models.Page, error) {
 	}
 	defer rows.Close()
 
-	var pages []models.Page
+	pages := make([]models.Page, 0)
 	for rows.Next() {
 		var page models.Page
 		var parentID sql.NullString
@@ -201,7 +201,7 @@ func (r *Repository) ListPageLinks(ctx context.Context, pageID string) ([]models
 	}
 	defer rows.Close()
 
-	var links []models.PageLink
+	links := make([]models.PageLink, 0)
 	for rows.Next() {
 		var link models.PageLink
 		if err := rows.Scan(&link.ID, &link.SourceID, &link.TargetID, &link.CreatedAt); err != nil {
@@ -266,7 +266,7 @@ func (r *Repository) ListDatabases(ctx context.Context) ([]models.Database, erro
 	}
 	defer rows.Close()
 
-	var dbs []models.Database
+	dbs := make([]models.Database, 0)
 	for rows.Next() {
 		var dbModel models.Database
 		var schemaJSON string
@@ -319,7 +319,7 @@ func (r *Repository) ListDatabaseEntries(ctx context.Context, databaseID string)
 	}
 	defer rows.Close()
 
-	var entries []models.DatabaseEntry
+	entries := make([]models.DatabaseEntry, 0)
 	for rows.Next() {
 		var entry models.DatabaseEntry
 		var propsJSON string
