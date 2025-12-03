@@ -1,0 +1,709 @@
+diff --git a/confluence-mcp/README.md b/confluence-mcp/README.md
+new file mode 100644
+index 0000000..5ee2388
+--- /dev/null
++++ b/confluence-mcp/README.md
+@@ -0,0 +1,71 @@
++# Confluence MCP Gateway (Go)
++
++This folder contains a minimal Model Context Protocol (MCP) server that proxies Confluence Cloud for trusted AI agents. It enforces per-subject space scoping so downstream tools can only retrieve content their identity is authorized to see.
++
++## Highlights
++- **Zero-trust friendly**: Requests must carry a signed JWT (e.g., issued by Microsoft Entra or Purview) and are filtered by per-subject policies.
++- **Space-aware queries**: Search and page fetches are constrained to allowed Confluence spaces, preventing cross-tenant data drift.
++- **Cloud-native HTTP server**: Small, dependency-light Go service with graceful shutdown and observability-friendly middleware.
++
++## Architecture
++- `cmd/server`: boots the HTTP server, loads YAML configuration, and wires dependencies.
++- `internal/config`: parses YAML config for server, Confluence, and access control settings.
++- `internal/auth`: validates bearer JWTs using a shared HMAC secret (swap with your Entra signing keys in production).
++- `internal/policy`: merges default and subject-specific allowed space lists.
++- `internal/confluence`: thin client for Confluence Cloud REST APIs (search + page retrieval with storage body).
++- `internal/handlers`: chi-based HTTP router exposing `/spaces`, `/search`, and `/pages/{id}` endpoints gated by policy.
++
++## Configuration
++Create a config file (see `config.example.yaml`) and point the server to it with `-config`.
++
++```yaml
++server:
++  addr: ":8080"
++
++confluence:
++  base_url: "https://your-domain.atlassian.net"
++  auth_token: "${CONFLUENCE_OAUTH_TOKEN}" # OAuth or PAT injected via env
++
++access_control:
++  shared_secret: "super-secret-hmac-key"   # replace with your Entra/Purview signing secret
++  default_spaces: [ENG]
++  policies:
++    - subject: "team-analyst"
++      allowed_spaces: [KM, DS]
++    - subject: "agent-support"
++      allowed_spaces: [SUPPORT]
++```
++
++- **Subjects** come from the JWT `sub` claim. Align this with your SSO identity (user object ID, app ID, or group ID).
++- The policy store merges `default_spaces` with any subject-specific entries, deduping and sorting for deterministic behavior.
++
++## Running
++```bash
++go run ./cmd/server -config ./config.example.yaml
++```
++
++Requests must include `Authorization: Bearer <jwt>` where the JWT is signed with the configured shared secret. Swap `auth.Authenticator` to verify Entra-issued tokens or JWKS for production; the handler contract already surfaces the subject for policy checks.
++
++### Example calls
++```bash
++# List spaces the caller may access
++curl -H "Authorization: Bearer $JWT" http://localhost:8080/spaces
++
++# Search within allowed spaces
++curl -G -H "Authorization: Bearer $JWT" --data-urlencode "q=zero trust" http://localhost:8080/search
++
++# Fetch a specific page (rejected if space not in policy)
++curl -H "Authorization: Bearer $JWT" http://localhost:8080/pages/123456
++```
++
++## Extending
++- Replace the HMAC validator with an Entra JWKS-backed validator to honor your Microsoft Purview SSO integration.
++- Persist policy entries in your governance source (e.g., Purview collections) and refresh the in-memory store on a schedule.
++- Add caching for Confluence responses to reduce latency and API usage under heavy concurrent loads.
++- Wire Prometheus or OpenTelemetry middleware for request tracing and rate/latency visibility.
++
++## Testing
++Run unit tests and code formatting checks via:
++```bash
++go test ./...
++```
+diff --git a/confluence-mcp/cmd/server/main.go b/confluence-mcp/cmd/server/main.go
+new file mode 100644
+index 0000000..1accd21
+--- /dev/null
++++ b/confluence-mcp/cmd/server/main.go
+@@ -0,0 +1,66 @@
++package main
++
++import (
++	"context"
++	"flag"
++	"log"
++	"net/http"
++	"os/signal"
++	"syscall"
++	"time"
++
++	"confluence-mcp/internal/auth"
++	"confluence-mcp/internal/config"
++	"confluence-mcp/internal/confluence"
++	"confluence-mcp/internal/handlers"
++	"confluence-mcp/internal/policy"
++)
++
++func main() {
++	cfgPath := flag.String("config", "config.yaml", "path to YAML config")
++	flag.Parse()
++
++	cfg, err := config.Load(*cfgPath)
++	if err != nil {
++		log.Fatalf("failed to load config: %v", err)
++	}
++
++	policies := make(map[string][]string, len(cfg.AccessControl.Policies))
++	for _, p := range cfg.AccessControl.Policies {
++		policies[p.Subject] = p.AllowedSpaces
++	}
++
++	api := &handlers.API{
++		Client:      confluence.NewClient(cfg.Confluence.BaseURL, cfg.Confluence.AuthToken),
++		Auth:        &auth.Authenticator{SharedSecret: []byte(cfg.AccessControl.SharedSecret)},
++		PolicyStore: policy.NewStore(cfg.AccessControl.DefaultSpaces, policies),
++	}
++
++	srv := &http.Server{
++		Addr:         cfg.Server.Addr,
++		Handler:      api.Router(),
++		ReadTimeout:  10 * time.Second,
++		WriteTimeout: 15 * time.Second,
++	}
++
++	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
++	defer stop()
++
++	go func() {
++		log.Printf("starting MCP Confluence gateway on %s", cfg.Server.Addr)
++		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
++			log.Fatalf("server error: %v", err)
++		}
++	}()
++
++	<-ctx.Done()
++	log.Println("shutdown signal received, draining")
++
++	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
++	defer cancel()
++	if err := srv.Shutdown(shutdownCtx); err != nil {
++		log.Fatalf("graceful shutdown failed: %v", err)
++	}
++
++	log.Println("server stopped")
++}
+diff --git a/confluence-mcp/config.example.yaml b/confluence-mcp/config.example.yaml
+new file mode 100644
+index 0000000..de379bb
+--- /dev/null
++++ b/confluence-mcp/config.example.yaml
+@@ -0,0 +1,16 @@
++server:
++  addr: ":8080"
++
++confluence:
++  base_url: "https://your-domain.atlassian.net"
++  auth_token: "${CONFLUENCE_OAUTH_TOKEN}"
++
++access_control:
++  shared_secret: "super-secret-hmac-key"
++  default_spaces:
++    - ENG
++  policies:
++    - subject: "team-analyst"
++      allowed_spaces: ["KM", "DS"]
++    - subject: "agent-support"
++      allowed_spaces: ["SUPPORT"]
+diff --git a/confluence-mcp/go.mod b/confluence-mcp/go.mod
+new file mode 100644
+index 0000000..2307ee3
+--- /dev/null
++++ b/confluence-mcp/go.mod
+@@ -0,0 +1,9 @@
++module confluence-mcp
++
++go 1.24.3
++
++require (
++	github.com/go-chi/chi/v5 v5.2.3
++	github.com/golang-jwt/jwt/v5 v5.3.0
++	gopkg.in/yaml.v3 v3.0.1
++)
+diff --git a/confluence-mcp/go.sum b/confluence-mcp/go.sum
+new file mode 100644
+index 0000000..df8bb31
+--- /dev/null
++++ b/confluence-mcp/go.sum
+@@ -0,0 +1,8 @@
++github.com/go-chi/chi/v5 v5.2.3 h1:WQIt9uxdsAbgIYgid+BpYc+liqQZGMHRaUwp0JUcvdE=
++github.com/go-chi/chi/v5 v5.2.3/go.mod h1:L2yAIGWB3H+phAw1NxKwWM+7eUH/lU8pOMm5hHcoops=
++github.com/golang-jwt/jwt/v5 v5.3.0 h1:pv4AsKCKKZuqlgs5sUmn4x8UlGa0kEVt/puTpKx9vvo=
++github.com/golang-jwt/jwt/v5 v5.3.0/go.mod h1:fxCRLWMO43lRc8nhHWY6LGqRcf+1gQWArsqaEUEa5bE=
++gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
++gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
++gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
++gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+diff --git a/confluence-mcp/internal/auth/auth.go b/confluence-mcp/internal/auth/auth.go
+new file mode 100644
+index 0000000..895cf17
+--- /dev/null
++++ b/confluence-mcp/internal/auth/auth.go
+@@ -0,0 +1,49 @@
++package auth
++
++import (
++	"errors"
++	"net/http"
++	"strings"
++
++	"github.com/golang-jwt/jwt/v5"
++)
++
++// Authenticator validates inbound JWT tokens issued by the identity provider.
++type Authenticator struct {
++	SharedSecret []byte
++}
++
++// SubjectFromRequest extracts the subject claim from a bearer token on the request.
++func (a *Authenticator) SubjectFromRequest(r *http.Request) (string, error) {
++	header := r.Header.Get("Authorization")
++	if header == "" {
++		return "", errors.New("authorization header missing")
++	}
++
++	parts := strings.SplitN(header, " ", 2)
++	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
++		return "", errors.New("authorization header must be bearer token")
++	}
++
++	token, err := jwt.Parse(parts[1], func(t *jwt.Token) (interface{}, error) {
++		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
++			return nil, errors.New("unexpected signing method")
++		}
++		return a.SharedSecret, nil
++	})
++	if err != nil {
++		return "", err
++	}
++
++	claims, ok := token.Claims.(jwt.MapClaims)
++	if !ok || !token.Valid {
++		return "", errors.New("invalid claims")
++	}
++
++	subject, _ := claims["sub"].(string)
++	if subject == "" {
++		return "", errors.New("subject claim missing")
++	}
++
++	return subject, nil
++}
+diff --git a/confluence-mcp/internal/config/config.go b/confluence-mcp/internal/config/config.go
+new file mode 100644
+index 0000000..5c81234
+--- /dev/null
++++ b/confluence-mcp/internal/config/config.go
+@@ -0,0 +1,52 @@
++package config
++
++import (
++	"fmt"
++	"os"
++
++	"gopkg.in/yaml.v3"
++)
++
++// Config captures all server configuration options loaded from YAML.
++type Config struct {
++	Server struct {
++		Addr           string   `yaml:"addr"`
++		AllowedOrigins []string `yaml:"allowed_origins"`
++	} `yaml:"server"`
++
++	Confluence struct {
++		BaseURL   string `yaml:"base_url"`
++		AuthToken string `yaml:"auth_token"`
++	} `yaml:"confluence"`
++
++	AccessControl struct {
++		SharedSecret  string   `yaml:"shared_secret"`
++		DefaultSpaces []string `yaml:"default_spaces"`
++		Policies      []Policy `yaml:"policies"`
++	} `yaml:"access_control"`
++}
++
++// Policy ties a subject identifier to the set of Confluence spaces they may query.
++type Policy struct {
++	Subject       string   `yaml:"subject"`
++	AllowedSpaces []string `yaml:"allowed_spaces"`
++}
++
++// Load reads and decodes YAML configuration from the given path.
++func Load(path string) (*Config, error) {
++	data, err := os.ReadFile(path)
++	if err != nil {
++		return nil, fmt.Errorf("read config: %w", err)
++	}
++
++	var cfg Config
++	if err := yaml.Unmarshal(data, &cfg); err != nil {
++		return nil, fmt.Errorf("decode config: %w", err)
++	}
++
++	if cfg.Server.Addr == "" {
++		cfg.Server.Addr = ":8080"
++	}
++
++	return &cfg, nil
++}
+diff --git a/confluence-mcp/internal/confluence/client.go b/confluence-mcp/internal/confluence/client.go
+new file mode 100644
+index 0000000..04dc7f5
+--- /dev/null
++++ b/confluence-mcp/internal/confluence/client.go
+@@ -0,0 +1,164 @@
++package confluence
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"net/http"
++	"net/url"
++	"strings"
++	"time"
++)
++
++// Client wraps the Confluence Cloud REST API with simple helpers.
++type Client struct {
++	baseURL    string
++	authToken  string
++	httpClient *http.Client
++}
++
++// NewClient builds a Confluence API client using the provided base URL and bearer token.
++func NewClient(baseURL, authToken string) *Client {
++	return &Client{
++		baseURL:   strings.TrimRight(baseURL, "/"),
++		authToken: authToken,
++		httpClient: &http.Client{
++			Timeout: 20 * time.Second,
++		},
++	}
++}
++
++// SearchResult describes a single Confluence content hit.
++type SearchResult struct {
++	ID      string `json:"id"`
++	Title   string `json:"title"`
++	URL     string `json:"url"`
++	Space   string `json:"space"`
++	Excerpt string `json:"excerpt"`
++}
++
++// Page represents a fetched Confluence page with body storage rendered as XHTML.
++type Page struct {
++	ID    string `json:"id"`
++	Title string `json:"title"`
++	Space struct {
++		Key  string `json:"key"`
++		Name string `json:"name"`
++	} `json:"space"`
++	Body struct {
++		Storage struct {
++			Value string `json:"value"`
++		} `json:"storage"`
++	} `json:"body"`
++	Links struct {
++		WebUI string `json:"webui"`
++	} `json:"_links"`
++}
++
++// Search executes a CQL query scoped to the provided spaces.
++func (c *Client) Search(ctx context.Context, query string, spaces []string, limit int) ([]SearchResult, error) {
++	cql := fmt.Sprintf("text ~ \"%s\"", escapeQuotes(query))
++	if len(spaces) > 0 {
++		quoted := make([]string, len(spaces))
++		for i, s := range spaces {
++			quoted[i] = fmt.Sprintf("\"%s\"", s)
++		}
++		cql = fmt.Sprintf("%s AND space in (%s)", cql, strings.Join(quoted, ","))
++	}
++
++	values := url.Values{}
++	values.Set("cql", cql)
++	if limit > 0 {
++		values.Set("limit", fmt.Sprintf("%d", limit))
++	}
++
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/wiki/rest/api/search", nil)
++	if err != nil {
++		return nil, err
++	}
++	req.URL.RawQuery = values.Encode()
++	c.applyAuth(req)
++
++	resp, err := c.httpClient.Do(req)
++	if err != nil {
++		return nil, err
++	}
++	defer resp.Body.Close()
++
++	if resp.StatusCode >= 300 {
++		return nil, fmt.Errorf("confluence search failed: %s", resp.Status)
++	}
++
++	var payload struct {
++		Results []struct {
++			Content struct {
++				ID    string `json:"id"`
++				Title string `json:"title"`
++				Links struct {
++					WebUI string `json:"webui"`
++				} `json:"_links"`
++				Space struct {
++					Key string `json:"key"`
++				} `json:"space"`
++			} `json:"content"`
++			Excerpt string `json:"excerpt"`
++		} `json:"results"`
++	}
++
++	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
++		return nil, err
++	}
++
++	results := make([]SearchResult, 0, len(payload.Results))
++	for _, item := range payload.Results {
++		results = append(results, SearchResult{
++			ID:      item.Content.ID,
++			Title:   item.Content.Title,
++			URL:     c.baseURL + item.Content.Links.WebUI,
++			Space:   item.Content.Space.Key,
++			Excerpt: item.Excerpt,
++		})
++	}
++
++	return results, nil
++}
++
++// GetPage retrieves a page including its storage format body for downstream processing.
++func (c *Client) GetPage(ctx context.Context, pageID string) (*Page, error) {
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/wiki/rest/api/content/%s", c.baseURL, pageID), nil)
++	if err != nil {
++		return nil, err
++	}
++	q := req.URL.Query()
++	q.Set("expand", "body.storage,space")
++	req.URL.RawQuery = q.Encode()
++
++	c.applyAuth(req)
++
++	resp, err := c.httpClient.Do(req)
++	if err != nil {
++		return nil, err
++	}
++	defer resp.Body.Close()
++
++	if resp.StatusCode >= 300 {
++		return nil, fmt.Errorf("confluence fetch failed: %s", resp.Status)
++	}
++
++	var page Page
++	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
++		return nil, err
++	}
++	return &page, nil
++}
++
++func (c *Client) applyAuth(req *http.Request) {
++	if c.authToken != "" {
++		req.Header.Set("Authorization", "Bearer "+c.authToken)
++	}
++	req.Header.Set("Accept", "application/json")
++}
++
++func escapeQuotes(input string) string {
++	return strings.ReplaceAll(input, "\"", "\\\"")
++}
+diff --git a/confluence-mcp/internal/handlers/handlers.go b/confluence-mcp/internal/handlers/handlers.go
+new file mode 100644
+index 0000000..d019fbb
+--- /dev/null
++++ b/confluence-mcp/internal/handlers/handlers.go
+@@ -0,0 +1,123 @@
++package handlers
++
++import (
++	"context"
++	"encoding/json"
++	"net/http"
++
++	"github.com/go-chi/chi/v5"
++	"github.com/go-chi/chi/v5/middleware"
++
++	"confluence-mcp/internal/auth"
++	"confluence-mcp/internal/confluence"
++	"confluence-mcp/internal/policy"
++)
++
++// ContextKey identifies per-request values.
++type ContextKey string
++
++const subjectKey ContextKey = "subject"
++
++// API wires dependencies and exposes HTTP handlers.
++type API struct {
++	Client      *confluence.Client
++	Auth        *auth.Authenticator
++	PolicyStore *policy.Store
++}
++
++// Router builds the chi router with authentication and core endpoints.
++func (a *API) Router() http.Handler {
++	r := chi.NewRouter()
++	r.Use(middleware.RequestID)
++	r.Use(middleware.RealIP)
++	r.Use(middleware.Recoverer)
++
++	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
++		w.WriteHeader(http.StatusOK)
++		_, _ = w.Write([]byte("ok"))
++	})
++
++	r.Group(func(r chi.Router) {
++		r.Use(a.authMiddleware)
++		r.Get("/spaces", a.listSpaces)
++		r.Get("/search", a.searchContent)
++		r.Get("/pages/{id}", a.getPage)
++	})
++
++	return r
++}
++
++func (a *API) authMiddleware(next http.Handler) http.Handler {
++	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		subject, err := a.Auth.SubjectFromRequest(r)
++		if err != nil {
++			http.Error(w, err.Error(), http.StatusUnauthorized)
++			return
++		}
++		ctx := r.Context()
++		ctx = contextWithSubject(ctx, subject)
++		next.ServeHTTP(w, r.WithContext(ctx))
++	})
++}
++
++func (a *API) listSpaces(w http.ResponseWriter, r *http.Request) {
++	subject := subjectFromContext(r.Context())
++	spaces := a.PolicyStore.AllowedSpaces(subject)
++	writeJSON(w, http.StatusOK, map[string]any{"spaces": spaces})
++}
++
++func (a *API) searchContent(w http.ResponseWriter, r *http.Request) {
++	subject := subjectFromContext(r.Context())
++	query := r.URL.Query().Get("q")
++	limit := 25
++	results, err := a.Client.Search(r.Context(), query, a.PolicyStore.AllowedSpaces(subject), limit)
++	if err != nil {
++		http.Error(w, err.Error(), http.StatusBadGateway)
++		return
++	}
++	writeJSON(w, http.StatusOK, results)
++}
++
++func (a *API) getPage(w http.ResponseWriter, r *http.Request) {
++	subject := subjectFromContext(r.Context())
++	pageID := chi.URLParam(r, "id")
++
++	page, err := a.Client.GetPage(r.Context(), pageID)
++	if err != nil {
++		http.Error(w, err.Error(), http.StatusBadGateway)
++		return
++	}
++
++	// Enforce space scoping
++	allowedSpaces := a.PolicyStore.AllowedSpaces(subject)
++	allowed := false
++	for _, s := range allowedSpaces {
++		if s == page.Space.Key {
++			allowed = true
++			break
++		}
++	}
++	if !allowed {
++		http.Error(w, "space not permitted", http.StatusForbidden)
++		return
++	}
++
++	writeJSON(w, http.StatusOK, page)
++}
++
++func contextWithSubject(ctx context.Context, subject string) context.Context {
++	return context.WithValue(ctx, subjectKey, subject)
++}
++
++func subjectFromContext(ctx context.Context) string {
++	if v, ok := ctx.Value(subjectKey).(string); ok {
++		return v
++	}
++	return ""
++}
++
++func writeJSON(w http.ResponseWriter, status int, payload any) {
++	w.Header().Set("Content-Type", "application/json")
++	w.WriteHeader(status)
++	_ = json.NewEncoder(w).Encode(payload)
++}
+diff --git a/confluence-mcp/internal/policy/policy.go b/confluence-mcp/internal/policy/policy.go
+new file mode 100644
+index 0000000..c7d76ce
+--- /dev/null
++++ b/confluence-mcp/internal/policy/policy.go
+@@ -0,0 +1,43 @@
++package policy
++
++import "slices"
++
++// Store holds authorization policies keyed by subject identifiers.
++type Store struct {
++	defaultSpaces []string
++	subjects      map[string][]string
++}
++
++// NewStore builds a policy store from default and subject-specific rules.
++func NewStore(defaultSpaces []string, policies map[string][]string) *Store {
++	return &Store{
++		defaultSpaces: dedupe(defaultSpaces),
++		subjects:      policies,
++	}
++}
++
++// AllowedSpaces returns the set of spaces a subject may access, merging defaults.
++func (s *Store) AllowedSpaces(subject string) []string {
++	merged := append([]string{}, s.defaultSpaces...)
++	if spaces, ok := s.subjects[subject]; ok {
++		merged = append(merged, spaces...)
++	}
++	return dedupe(merged)
++}
++
++func dedupe(values []string) []string {
++	seen := make(map[string]struct{}, len(values))
++	var result []string
++	for _, v := range values {
++		if v == "" {
++			continue
++		}
++		if _, ok := seen[v]; ok {
++			continue
++		}
++		seen[v] = struct{}{}
++		result = append(result, v)
++	}
++	slices.Sort(result)
++	return result
++}
+diff --git a/confluence-mcp/internal/policy/policy_test.go b/confluence-mcp/internal/policy/policy_test.go
+new file mode 100644
+index 0000000..9ecaf5e
+--- /dev/null
++++ b/confluence-mcp/internal/policy/policy_test.go
+@@ -0,0 +1,28 @@
++package policy
++
++import "testing"
++
++func TestAllowedSpacesMergesAndDedupes(t *testing.T) {
++	store := NewStore([]string{"A", "B", "A"}, map[string][]string{
++		"user": []string{"B", "C"},
++	})
++
++	got := store.AllowedSpaces("user")
++	expected := []string{"A", "B", "C"}
++	if len(got) != len(expected) {
++		t.Fatalf("unexpected length: %v", got)
++	}
++	for i, v := range expected {
++		if got[i] != v {
++			t.Fatalf("expected %s at %d, got %s", v, i, got[i])
++		}
++	}
++}
++
++func TestAllowedSpacesFallsBackToDefault(t *testing.T) {
++	store := NewStore([]string{"BASE"}, map[string][]string{})
++	got := store.AllowedSpaces("unknown")
++	if len(got) != 1 || got[0] != "BASE" {
++		t.Fatalf("unexpected spaces: %v", got)
++	}
++}
+diff --git a/confluence-mcp/notes.md b/confluence-mcp/notes.md
+new file mode 100644
+index 0000000..cc25030
+--- /dev/null
++++ b/confluence-mcp/notes.md
+@@ -0,0 +1,8 @@
++## Work log
++- Created `confluence-mcp` workspace folder per root instructions.
++- Initialized Go module `confluence-mcp`.
++- Added configuration loader, JWT authenticator, policy store, Confluence client, and HTTP handlers scaffolding.
++- Wired main server entry point with graceful shutdown and policy-aware routing.
++- Added example YAML config and README describing architecture and usage.
++- Ran `go test ./...` (initial run compiled toolchain; tests pass).
++- Captured current repo diff into `diff.patch` per instructions.

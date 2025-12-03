@@ -1,0 +1,16 @@
+server:
+  addr: ":8080"
+
+confluence:
+  base_url: "https://your-domain.atlassian.net"
+  auth_token: "${CONFLUENCE_OAUTH_TOKEN}"
+
+access_control:
+  shared_secret: "super-secret-hmac-key"
+  default_spaces:
+    - ENG
+  policies:
+    - subject: "team-analyst"
+      allowed_spaces: ["KM", "DS"]
+    - subject: "agent-support"
+      allowed_spaces: ["SUPPORT"]
